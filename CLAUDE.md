@@ -336,3 +336,21 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw   # macOS
 ```
 
 `container/build.sh` reads `INSTALL_CJK_FONTS` from `.env` and passes it through as a Docker build-arg. Without CJK fonts, Chromium-rendered screenshots and PDFs containing CJK text show tofu (empty rectangles) instead of characters.
+
+## Marker (local PDF → Markdown)
+
+Agent containers ship without [Marker](https://github.com/datalab-to/marker) by default (~3-5GB saved: torch + surya models via `uv tool install marker-pdf`). Enable it when an agent group needs to convert digital PDFs (papers, reports — including tables and equations) to Markdown locally, without an external API:
+
+```bash
+# Ensure .env has INSTALL_MARKER=true (overwrite or append)
+grep -q '^INSTALL_MARKER=' .env && sed -i.bak 's/^INSTALL_MARKER=.*/INSTALL_MARKER=true/' .env && rm -f .env.bak || echo 'INSTALL_MARKER=true' >> .env
+
+# Rebuild and restart so new sessions pick up the new image
+./container/build.sh
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw   # macOS
+# systemctl --user restart nanoclaw                # Linux
+```
+
+`container/build.sh` reads `INSTALL_MARKER` from `.env` and passes it through as a Docker build-arg — same mechanism as `INSTALL_CJK_FONTS` above. This is a base-image flag: once rebuilt, `marker_single <file> --output_format markdown --output_dir <dir>` is available in **every** agent group's container, not just the one that asked for it.
+
+Model weights are not baked into the image — Marker downloads them into `$HOME/.cache/huggingface` on first real conversion (a few GB). Since containers run with `--rm`, that cache is wiped on every restart unless mounted from the host: add an `additional_mounts` entry (`ncl groups config update` or the self-mod MCP tool) pointing a persistent host directory at `/home/node/.cache/huggingface` for any group that will use Marker regularly, so the download only happens once.

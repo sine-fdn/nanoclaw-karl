@@ -7,10 +7,11 @@
 # registry and retags it to the same local tag this script builds — the one
 # thing the host ever looks at. See that script for the settings it reads.
 #
-# Reads one optional build flag from ../.env:
+# Reads optional build flags from ../.env:
 #   INSTALL_CJK_FONTS=true   — add Chinese/Japanese/Korean fonts (~200MB)
+#   INSTALL_MARKER=true      — add Marker PDF-to-Markdown (uv + marker-pdf, ~3-5GB)
 # setup/container.ts reads the same file, so both build paths stay in sync.
-# Callers can also override by exporting INSTALL_CJK_FONTS directly.
+# Callers can also override by exporting INSTALL_CJK_FONTS / INSTALL_MARKER directly.
 
 set -e
 
@@ -129,6 +130,9 @@ fi
 if [ -z "${INSTALL_CJK_FONTS:-}" ] && [ -f "../.env" ]; then
     INSTALL_CJK_FONTS="$(grep '^INSTALL_CJK_FONTS=' ../.env | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
 fi
+if [ -z "${INSTALL_MARKER:-}" ] && [ -f "../.env" ]; then
+    INSTALL_MARKER="$(grep '^INSTALL_MARKER=' ../.env | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+fi
 
 BUILD_ARGS=()
 if [ "${INSTALL_CJK_FONTS:-false}" = "true" ]; then
@@ -139,6 +143,15 @@ if [ "${INSTALL_CJK_FONTS:-false}" = "true" ]; then
     else
         echo "CJK fonts: enabled (adds ~200MB)"
         BUILD_ARGS+=(--build-arg INSTALL_CJK_FONTS=true)
+    fi
+fi
+if [ "${INSTALL_MARKER:-false}" = "true" ]; then
+    if [ "$PULL" = "true" ]; then
+        # Same reasoning as CJK fonts above: nothing to act on for a pulled image.
+        echo "Marker (PDF→Markdown): ignored — this install pulls its image instead of building it"
+    else
+        echo "Marker (PDF→Markdown): enabled (adds ~3-5GB — uv + marker-pdf; model weights download on first use)"
+        BUILD_ARGS+=(--build-arg INSTALL_MARKER=true)
     fi
 fi
 

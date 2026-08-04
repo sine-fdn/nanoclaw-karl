@@ -25,7 +25,21 @@ never ingest from a summarizing fetch tool.
 
 ## Source formats
 
-- **PDFs, images:** read natively — no extra tooling needed.
+- **PDFs:** convert to Markdown before ingesting — never read the PDF
+  directly for ingestion (see decision
+  [0005](/workspace/extra/karl/decisions/0005-pdf-ingestion-via-marker-conversion.md)).
+  After saving the PDF under `ccti/`, run:
+  ```bash
+  marker_single ccti/<subdir>/<YYYY-MM-DD>-<slug>.pdf --output_format markdown --output_dir ccti/<subdir>/
+  ```
+  This writes a Markdown twin next to the PDF (same date-prefixed name,
+  `.md` extension). Read and ingest **that Markdown file**, not the PDF —
+  it's what you cite against for this source. The PDF stays in `ccti/` as
+  the immutable original.
+  Exception: scanned/image-only PDFs — Marker expects a digital,
+  text-bearing PDF. If a PDF turns out to be a scan, fall back to reading
+  it natively for that source and note the exception in `wiki/log.md`.
+- **Images:** read natively — no extra tooling needed.
 - **Voice/audio:** no transcription capability is installed. Only ingest
   already-transcribed text (e.g. from Voice Memos, Otter) as the dated
   source file; never attempt to process a raw audio file. If someone hands
@@ -46,7 +60,8 @@ never ingest from a summarizing fetch tool.
 ## Operations
 
 **Ingest** (one source at a time — never batch):
-1. Read the raw file fully.
+1. Read the source fully — for a PDF, that's its Markdown twin (see Source
+   formats above), not the PDF itself.
 2. Discuss key takeaways with the user before writing.
 3. Write/update all affected pages: source summary, entity pages, concept
    pages, cross-references. A single source may touch 10–15 pages.

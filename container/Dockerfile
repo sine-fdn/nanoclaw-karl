@@ -16,12 +16,22 @@ FROM node:22-slim
 # CJK fonts add ~200MB. Opt in only if you render Chinese/Japanese/Korean text.
 ARG INSTALL_CJK_FONTS=false
 
+# Marker (PDF → Markdown, torch + surya models) adds ~3-5GB. Opt in only if an
+# agent group needs local PDF-to-Markdown conversion. See the Marker section
+# below for why it's a separate opt-in rather than always-on.
+ARG INSTALL_MARKER=false
+
 # Pin versions for reproducibility. Bump deliberately — unpinned installs mean
 # every rebuild silently picks up the latest and can break in lockstep across
 # all users. The global Node CLIs (claude-code, agent-browser) are
 # pinned in cli-tools.json so a skill can add one with a json-merge; Bun (the
 # runtime) is pinned here because it installs from a different source.
 ARG BUN_VERSION=1.3.12
+
+# uv + marker-pdf: only fetched/installed when INSTALL_MARKER=true (see below),
+# but declared here with the other version pins per convention.
+ARG UV_VERSION=0.12.1
+ARG MARKER_PDF_VERSION=2.0.0
 
 # ---- System dependencies -----------------------------------------------------
 # tini: correct PID 1 / signal forwarding so outbound.db writes finalize on
@@ -105,6 +115,33 @@ RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 COPY cli-tools.json install-cli-tools.sh /tmp/
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     sh /tmp/install-cli-tools.sh /tmp/cli-tools.json
+
+# ---- Marker (PDF → Markdown), opt-in -----------------------------------------
+# Heavy ML tool (torch + surya models) — off by default, like the CJK fonts
+# above. Installed via uv rather than system pip/apt: this image ships no
+# python3 at all, and Debian's would be PEP 668 "externally managed" anyway.
+# uv manages its own Python + venv, so no system python3 package is needed.
+#
+# uv itself installs from a version-pinned release URL (not the rolling
+# astral.sh/uv/install.sh script) for the same reproducibility reason BUN_VERSION
+# is pinned above. UV_UNMANAGED_INSTALL skips the self-updater and shell-rc
+# edits, neither of which make sense baked into an image.
+#
+# Model weights are NOT baked in here — that would need a network call at
+# build time pinned to a fixed model revision, and would bloat every image
+# whether or not a group actually uses Marker. They download on first real
+# conversion instead, into $HOME/.cache/huggingface. Mount that path from the
+# host (additionalMounts on the agent group's container config) so it
+# survives container restarts (`--rm` wipes anything not mounted) instead of
+# re-downloading every time.
+ENV UV_TOOL_DIR=/opt/uv-tools
+ENV UV_TOOL_BIN_DIR=/usr/local/bin
+RUN if [ "$INSTALL_MARKER" = "true" ]; then \
+        curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-installer.sh" \
+            | env UV_INSTALL_DIR=/usr/local/bin UV_UNMANAGED_INSTALL=1 sh && \
+        uv tool install "marker-pdf==${MARKER_PDF_VERSION}" && \
+        chmod -R a+rX /opt/uv-tools; \
+    fi
 
 # ---- ncl CLI wrapper ----------------------------------------------------------
 # Actual script lives in the mounted source at /app/src/cli/ncl.ts.
