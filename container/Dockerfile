@@ -63,6 +63,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && if [ "$INSTALL_CJK_FONTS" = "true" ]; then \
         apt-get install -y --no-install-recommends fonts-noto-cjk; \
        fi \
+    && if [ "$INSTALL_MARKER" = "true" ]; then \
+        apt-get install -y --no-install-recommends build-essential \
+            zlib1g-dev libjpeg-dev libopenjp2-7-dev libtiff-dev \
+            libfreetype6-dev liblcms2-dev libwebp-dev libharfbuzz-dev \
+            libfribidi-dev libxcb1-dev; \
+       fi \
     && rm -rf /var/lib/apt/lists/*
 
 # Chromium path for agent-browser / Playwright consumers
@@ -134,6 +140,16 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 # host (additionalMounts on the agent group's container config) so it
 # survives container restarts (`--rm` wipes anything not mounted) instead of
 # re-downloading every time.
+#
+# build-essential + Pillow's external-library dev headers (added to the apt
+# block above, same flag): uv provisions its own (unpinned, latest) Python
+# for the tool venv, which can land on a version fresh enough that some deps
+# have no prebuilt wheel yet — Pillow hit exactly that and had to compile
+# from source. It failed once for missing zlib, then again for missing jpeg
+# (both "required" per Pillow's own build check); the rest of the list here
+# is Pillow's documented "build with all optional features" set, added
+# preemptively so a third format library doesn't cost another multi-GB,
+# several-minute round-trip through the unrelated torch/CUDA downloads below.
 ENV UV_TOOL_DIR=/opt/uv-tools
 ENV UV_TOOL_BIN_DIR=/usr/local/bin
 RUN if [ "$INSTALL_MARKER" = "true" ]; then \
