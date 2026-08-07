@@ -263,7 +263,7 @@ export async function run(args: string[]): Promise<void> {
   const buildCmd = 'docker build';
   const runCmd = 'docker';
 
-  // Build-args from .env: INSTALL_CJK_FONTS and INSTALL_MARKER today.
+  // Build-args from .env: INSTALL_CJK_FONTS, INSTALL_MARKER, INSTALL_TYPST today.
   // Keeps /setup and ./container/build.sh in sync — both read the same source.
   const buildArgs: string[] = [];
   try {
@@ -277,6 +277,9 @@ export async function run(args: string[]): Promise<void> {
       const markerMatch = envContent.match(/^INSTALL_MARKER=(.+)$/m);
       const markerVal = markerMatch?.[1].trim().replace(/^["']|["']$/g, '').toLowerCase();
       if (markerVal === 'true') buildArgs.push('--build-arg INSTALL_MARKER=true');
+      const typstMatch = envContent.match(/^INSTALL_TYPST=(.+)$/m);
+      const typstVal = typstMatch?.[1].trim().replace(/^["']|["']$/g, '').toLowerCase();
+      if (typstVal === 'true') buildArgs.push('--build-arg INSTALL_TYPST=true');
     }
   } catch {
     // .env is optional; absence is normal on a fresh checkout

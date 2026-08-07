@@ -10,8 +10,10 @@
 # Reads optional build flags from ../.env:
 #   INSTALL_CJK_FONTS=true   — add Chinese/Japanese/Korean fonts (~200MB)
 #   INSTALL_MARKER=true      — add Marker PDF-to-Markdown (uv + marker-pdf, ~3-5GB)
+#   INSTALL_TYPST=true       — add pandoc + typst (Markdown → PDF rendering)
 # setup/container.ts reads the same file, so both build paths stay in sync.
-# Callers can also override by exporting INSTALL_CJK_FONTS / INSTALL_MARKER directly.
+# Callers can also override by exporting INSTALL_CJK_FONTS / INSTALL_MARKER /
+# INSTALL_TYPST directly.
 
 set -e
 
@@ -133,6 +135,9 @@ fi
 if [ -z "${INSTALL_MARKER:-}" ] && [ -f "../.env" ]; then
     INSTALL_MARKER="$(grep '^INSTALL_MARKER=' ../.env | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
 fi
+if [ -z "${INSTALL_TYPST:-}" ] && [ -f "../.env" ]; then
+    INSTALL_TYPST="$(grep '^INSTALL_TYPST=' ../.env | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+fi
 
 BUILD_ARGS=()
 if [ "${INSTALL_CJK_FONTS:-false}" = "true" ]; then
@@ -152,6 +157,15 @@ if [ "${INSTALL_MARKER:-false}" = "true" ]; then
     else
         echo "Marker (PDF→Markdown): enabled (adds ~3-5GB — uv + marker-pdf; model weights download on first use)"
         BUILD_ARGS+=(--build-arg INSTALL_MARKER=true)
+    fi
+fi
+if [ "${INSTALL_TYPST:-false}" = "true" ]; then
+    if [ "$PULL" = "true" ]; then
+        # Same reasoning as CJK fonts above: nothing to act on for a pulled image.
+        echo "Typst (Markdown→PDF): ignored — this install pulls its image instead of building it"
+    else
+        echo "Typst (Markdown→PDF): enabled (adds pandoc + typst + uv)"
+        BUILD_ARGS+=(--build-arg INSTALL_TYPST=true)
     fi
 fi
 

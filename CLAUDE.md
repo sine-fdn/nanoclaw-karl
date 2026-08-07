@@ -354,3 +354,19 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw   # macOS
 `container/build.sh` reads `INSTALL_MARKER` from `.env` and passes it through as a Docker build-arg — same mechanism as `INSTALL_CJK_FONTS` above. This is a base-image flag: once rebuilt, `marker_single <file> --output_format markdown --output_dir <dir>` is available in **every** agent group's container, not just the one that asked for it.
 
 Model weights are not baked into the image — Marker downloads them into `$HOME/.cache/huggingface` on first real conversion (a few GB). Since containers run with `--rm`, that cache is wiped on every restart unless mounted from the host: add an `additional_mounts` entry (`ncl groups config update` or the self-mod MCP tool) pointing a persistent host directory at `/home/node/.cache/huggingface` for any group that will use Marker regularly, so the download only happens once.
+
+## Typst (local Markdown → PDF rendering)
+
+Agent containers ship without `pandoc`/`typst`/`uv` by default. Enable this trio when an agent group needs to render Markdown to a styled PDF locally (e.g. a skill with a bundled Markdown → pandoc → Typst → PDF pipeline):
+
+```bash
+# Ensure .env has INSTALL_TYPST=true (overwrite or append)
+grep -q '^INSTALL_TYPST=' .env && sed -i.bak 's/^INSTALL_TYPST=.*/INSTALL_TYPST=true/' .env && rm -f .env.bak || echo 'INSTALL_TYPST=true' >> .env
+
+# Rebuild and restart so new sessions pick up the new image
+./container/build.sh
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw   # macOS
+# systemctl --user restart nanoclaw                # Linux
+```
+
+`container/build.sh` reads `INSTALL_TYPST` from `.env` and passes it through as a Docker build-arg — same mechanism as `INSTALL_CJK_FONTS`/`INSTALL_MARKER` above. This is a base-image flag: once rebuilt, `pandoc`, `typst`, and `uv` are available in **every** agent group's container, not just the one that asked for it. `pandoc` installs from Debian's apt repo; `typst` has no apt package, so it's fetched as a pinned static release binary from GitHub instead (`TYPST_VERSION` in `container/Dockerfile`); `uv` is the same pinned install already used for Marker above (shared — enabling either flag installs it once).
