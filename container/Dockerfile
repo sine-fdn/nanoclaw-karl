@@ -21,6 +21,11 @@ ARG INSTALL_CJK_FONTS=false
 # below for why it's a separate opt-in rather than always-on.
 ARG INSTALL_MARKER=false
 
+# Pandoc + Typst (Markdown → Typst → PDF rendering, e.g. for the `dossier`
+# skill). Opt in only if an agent group renders Markdown to a styled PDF
+# locally. See the Typst section below.
+ARG INSTALL_TYPST=false
+
 # Pin versions for reproducibility. Bump deliberately — unpinned installs mean
 # every rebuild silently picks up the latest and can break in lockstep across
 # all users. The global Node CLIs (claude-code, agent-browser) are
@@ -32,6 +37,9 @@ ARG BUN_VERSION=1.3.12
 # but declared here with the other version pins per convention.
 ARG UV_VERSION=0.12.1
 ARG MARKER_PDF_VERSION=2.0.0
+
+# typst: only fetched/installed when INSTALL_TYPST=true (see below).
+ARG TYPST_VERSION=0.15.1
 
 # ---- System dependencies -----------------------------------------------------
 # tini: correct PID 1 / signal forwarding so outbound.db writes finalize on
@@ -68,6 +76,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
             zlib1g-dev libjpeg-dev libopenjp2-7-dev libtiff-dev \
             libfreetype6-dev liblcms2-dev libwebp-dev libharfbuzz-dev \
             libfribidi-dev libxcb1-dev; \
+       fi \
+    && if [ "$INSTALL_TYPST" = "true" ]; then \
+        apt-get install -y --no-install-recommends pandoc xz-utils; \
        fi \
     && rm -rf /var/lib/apt/lists/*
 
@@ -152,11 +163,36 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 # several-minute round-trip through the unrelated torch/CUDA downloads below.
 ENV UV_TOOL_DIR=/opt/uv-tools
 ENV UV_TOOL_BIN_DIR=/usr/local/bin
-RUN if [ "$INSTALL_MARKER" = "true" ]; then \
+RUN if [ "$INSTALL_MARKER" = "true" ] || [ "$INSTALL_TYPST" = "true" ]; then \
         curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-installer.sh" \
-            | env UV_INSTALL_DIR=/usr/local/bin UV_UNMANAGED_INSTALL=1 sh && \
+            | env UV_INSTALL_DIR=/usr/local/bin UV_UNMANAGED_INSTALL=1 sh; \
+    fi \
+    && if [ "$INSTALL_MARKER" = "true" ]; then \
         uv tool install "marker-pdf==${MARKER_PDF_VERSION}" && \
         chmod -R a+rX /opt/uv-tools; \
+    fi
+
+# ---- Typst (Markdown → PDF rendering), opt-in --------------------------------
+# Pairs with pandoc (apt block above) and uv (installed above, shared with
+# Marker) for skills that render Markdown to a styled PDF locally — e.g. the
+# `dossier` skill's bundled renderer. No apt package exists for typst on
+# Debian, so it's fetched as a pinned, statically-linked release binary from
+# GitHub instead (musl build; runs fine on this glibc base — same reasoning
+# as fetching Bun's official installer above rather than an apt/npm package).
+# uname -m rather than Docker's TARGETARCH: this RUN executes on the build
+# platform, not the target platform, so it stays correct even for a
+# cross-arch build.
+RUN if [ "$INSTALL_TYPST" = "true" ]; then \
+        ARCH="$(uname -m)" && \
+        case "$ARCH" in \
+            x86_64) TYPST_ARCH=x86_64-unknown-linux-musl ;; \
+            aarch64) TYPST_ARCH=aarch64-unknown-linux-musl ;; \
+            *) echo "Unsupported architecture for typst: $ARCH" >&2; exit 1 ;; \
+        esac && \
+        curl -fsSL "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${TYPST_ARCH}.tar.xz" \
+            | tar -xJ -C /tmp && \
+        install -m 0755 "/tmp/typst-${TYPST_ARCH}/typst" /usr/local/bin/typst && \
+        rm -rf "/tmp/typst-${TYPST_ARCH}"; \
     fi
 
 # ---- ncl CLI wrapper ----------------------------------------------------------

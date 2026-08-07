@@ -491,9 +491,11 @@ async function buildContainerArgs(
   args.push('-e', `TZ=${containerConfig.timezone ?? TIMEZONE}`);
 
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
+  const providerNoProxyParts: string[] = [];
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {
       args.push('-e', `${key}=${value}`);
+      if (key.toLowerCase() === 'no_proxy') providerNoProxyParts.push(value);
     }
   }
 
@@ -540,6 +542,18 @@ async function buildContainerArgs(
     throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
   }
   log.info('OneCLI gateway applied', { containerName });
+
+  // The gateway's HTTP(S)_PROXY applies to ALL outbound traffic by default,
+  // including loopback. Tools that spawn local subprocesses and health-check
+  // them over plain HTTP (e.g. Marker's Surya model servers on
+  // 127.0.0.1:<ephemeral port>) get that probe silently routed through the
+  // gateway instead of staying local — the gateway then fails to dial that
+  // port in its own network namespace and logs a stream of "Connection
+  // refused" warnings while the probe never succeeds. Push last so this wins
+  // over any NO_PROXY the fetched OneCLI config or provider env may have set.
+  const noProxyValue = [...providerNoProxyParts, '127.0.0.1', 'localhost', '::1'].join(',');
+  args.push('-e', `NO_PROXY=${noProxyValue}`);
+  args.push('-e', `no_proxy=${noProxyValue}`);
 
   // Override entrypoint: run v2 entry point directly via Bun (no tsc, no stdin).
   args.push('--entrypoint', 'bash');
