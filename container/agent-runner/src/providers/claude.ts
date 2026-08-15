@@ -32,6 +32,16 @@ export interface SdkRateLimitInfo {
 }
 
 /**
+ * `resetsAt` arrives as an epoch number whose unit the SDK doesn't state —
+ * values below 1e12 are seconds, above are milliseconds. Returns an ISO-8601
+ * UTC string, or undefined when the field is absent or unusable.
+ */
+export function normalizeResetsAt(resetsAt: number | undefined): string | undefined {
+  if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt)) return undefined;
+  return new Date(resetsAt < 1e12 ? resetsAt * 1000 : resetsAt).toISOString();
+}
+
+/**
  * Map an SDK `rate_limit_event` to a provider event — or to NOTHING.
  *
  * The SDK emits this "when rate limit info changes": it is TELEMETRY, and
@@ -53,11 +63,8 @@ export function classifyRateLimitEvent(
 ): { message: string; classification: 'rate_limit' | 'quota' } | null {
   if (info?.status !== 'rejected') return null;
   const outOfCredits = info.errorCode === 'credits_required' || info.overageDisabledReason === 'out_of_credits';
-  let detail = '';
-  if (typeof info.resetsAt === 'number' && Number.isFinite(info.resetsAt)) {
-    const ms = info.resetsAt < 1e12 ? info.resetsAt * 1000 : info.resetsAt;
-    detail = ` (resets ${new Date(ms).toISOString()})`;
-  }
+  const resets = normalizeResetsAt(info.resetsAt);
+  const detail = resets ? ` (resets ${resets})` : '';
   const window = info.rateLimitType ? ` [${info.rateLimitType}]` : '';
   return {
     message: `${outOfCredits ? 'Out of credits' : 'Rate limit'}${window}${detail}`,
@@ -585,7 +592,38 @@ export class ClaudeProvider implements AgentProvider {
           // (e.g. a non-retryable 403 billing_error) carry their message in
           // `errors[]` instead. Surface either so the poll-loop can deliver a
           // billing/quota notice to the user rather than dropping the turn.
-          const m = message as { result?: string; is_error?: boolean; errors?: string[] };
+          const m = message as {
+            result?: string;
+            is_error?: boolean;
+            errors?: string[];
+            usage?: {
+              input_tokens?: number;
+              output_tokens?: number;
+              cache_creation_input_tokens?: number;
+              cache_read_input_tokens?: number;
+            };
+            total_cost_usd?: number;
+            modelUsage?: Record<string, unknown>;
+            num_turns?: number;
+            duration_ms?: number;
+          };
+          // Accounting first: the result event is the only place the SDK
+          // reports what the turn (including every subagent it spawned) cost.
+          // Emitted separately from `result` so consumers that only care about
+          // delivery can keep ignoring it.
+          if (m.usage || typeof m.total_cost_usd === 'number') {
+            yield {
+              type: 'usage',
+              inputTokens: m.usage?.input_tokens ?? 0,
+              cacheCreationTokens: m.usage?.cache_creation_input_tokens ?? 0,
+              cacheReadTokens: m.usage?.cache_read_input_tokens ?? 0,
+              outputTokens: m.usage?.output_tokens ?? 0,
+              costUsd: m.total_cost_usd,
+              numTurns: m.num_turns,
+              durationMs: m.duration_ms,
+              modelUsage: m.modelUsage,
+            };
+          }
           const text = m.result ?? (m.errors && m.errors.length > 0 ? m.errors.join('\n') : null);
           yield { type: 'result', text, isError: m.is_error === true };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
@@ -604,6 +642,20 @@ export class ClaudeProvider implements AgentProvider {
           //   'out_of_credits'  → genuinely out of credits (billing)
           //   otherwise         → a transient window limit that resets.
           const info = (message as { rate_limit_info?: SdkRateLimitInfo }).rate_limit_info;
+          // Telemetry for EVERY observation, healthy ones included — this is
+          // the only live headroom signal the system gets, and the window it
+          // reports (e.g. five_hour) is what actually blocks a busy group.
+          // Previously it was logged at 'allowed_warning' and otherwise
+          // dropped, so there was no record of how close a burst came.
+          if (info) {
+            yield {
+              type: 'rate_limit',
+              status: info.status ?? 'unknown',
+              rateLimitType: info.rateLimitType,
+              utilization: info.utilization,
+              resetsAt: normalizeResetsAt(info.resetsAt),
+            };
+          }
           const blocked = classifyRateLimitEvent(info);
           if (!blocked) {
             // Informational ('allowed' / 'allowed_warning') — never kill the turn.

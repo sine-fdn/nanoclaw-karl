@@ -112,8 +112,91 @@ export function getOutboundDb(): Database {
         updated_at               TEXT NOT NULL
       );
     `);
+    // session_usage / rate_limit_observations: append-one-row-per-event
+    // accounting. Both are pure telemetry — nothing reads them to make a
+    // decision. Volume is bounded by turn count (a busy day is a few thousand
+    // rows of ~100 bytes), so no retention policy for now.
+    _outbound.exec(`
+      CREATE TABLE IF NOT EXISTS session_usage (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        recorded_at           TEXT NOT NULL,
+        input_tokens          INTEGER NOT NULL,
+        cache_creation_tokens INTEGER NOT NULL,
+        cache_read_tokens     INTEGER NOT NULL,
+        output_tokens         INTEGER NOT NULL,
+        cost_usd              REAL,
+        num_turns             INTEGER,
+        duration_ms           INTEGER,
+        model_usage           TEXT
+      );
+      CREATE TABLE IF NOT EXISTS rate_limit_observations (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        recorded_at     TEXT NOT NULL,
+        status          TEXT NOT NULL,
+        rate_limit_type TEXT,
+        utilization     REAL,
+        resets_at       TEXT
+      );
+    `);
   }
   return _outbound;
+}
+
+/**
+ * Record what a completed turn cost. `modelUsage` is stored as JSON — it is
+ * the per-model breakdown, and the only place spend by subagents (which never
+ * appear as turns of their own) becomes visible.
+ */
+export function recordSessionUsage(u: {
+  inputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  outputTokens: number;
+  costUsd?: number;
+  numTurns?: number;
+  durationMs?: number;
+  modelUsage?: Record<string, unknown>;
+}): void {
+  getOutboundDb()
+    .prepare(
+      `INSERT INTO session_usage
+         (recorded_at, input_tokens, cache_creation_tokens, cache_read_tokens,
+          output_tokens, cost_usd, num_turns, duration_ms, model_usage)
+       VALUES ($recorded_at, $input_tokens, $cache_creation_tokens, $cache_read_tokens,
+               $output_tokens, $cost_usd, $num_turns, $duration_ms, $model_usage)`,
+    )
+    .run({
+      $recorded_at: new Date().toISOString(),
+      $input_tokens: u.inputTokens,
+      $cache_creation_tokens: u.cacheCreationTokens,
+      $cache_read_tokens: u.cacheReadTokens,
+      $output_tokens: u.outputTokens,
+      $cost_usd: u.costUsd ?? null,
+      $num_turns: u.numTurns ?? null,
+      $duration_ms: u.durationMs ?? null,
+      $model_usage: u.modelUsage ? JSON.stringify(u.modelUsage) : null,
+    });
+}
+
+/** Record a rate-limit headroom observation, healthy ones included. */
+export function recordRateLimitObservation(o: {
+  status: string;
+  rateLimitType?: string;
+  utilization?: number;
+  resetsAt?: string;
+}): void {
+  getOutboundDb()
+    .prepare(
+      `INSERT INTO rate_limit_observations (recorded_at, status, rate_limit_type, utilization, resets_at)
+       VALUES ($recorded_at, $status, $rate_limit_type, $utilization, $resets_at)`,
+    )
+    .run({
+      $recorded_at: new Date().toISOString(),
+      $status: o.status,
+      $rate_limit_type: o.rateLimitType ?? null,
+      $utilization: o.utilization ?? null,
+      $resets_at: o.resetsAt ?? null,
+    });
 }
 
 /**

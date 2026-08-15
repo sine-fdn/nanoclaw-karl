@@ -46,6 +46,7 @@ spawn. For the default (Claude) provider these are:
 | `/workspace/agent/.claude-fragments` | group `.claude-fragments/` | RO | Composer skill/MCP fragments |
 | `/app/CLAUDE.md` | `container/CLAUDE.md` | RO | Shared base doc imported by the composed entry point |
 | `/home/node/.claude` | `data/v2-sessions/<group>/.claude-shared/` | RW | Claude state, settings, skill symlinks |
+| `/home/node/.cache` | `data/model-cache/<group>/` | RW | Per-group tool cache so multi-GB model downloads survive `--rm`. Per group, never shared — a shared cache would be a cross-group write channel into a path models load from |
 | `/app/src` | `container/agent-runner/src/` | RO | Shared agent-runner source (same for all groups) |
 | `/app/skills` | `container/skills/` | RO | Shared container skills |
 | `/workspace/extra/<name>` | allowlisted host dir | RO (RW only if allowed) | Operator-configured additional mounts |
@@ -123,6 +124,22 @@ Each NanoClaw group gets its own OneCLI agent identity. This allows different cr
 - The project root and `.env` — never mounted; the container only receives the paths in the mount table above.
 - The mount allowlist — external (`~/.config/nanoclaw/…`), never mounted.
 - Real credentials — injected per request by the OneCLI gateway, never written into any mount.
+
+**Trust anchors inside the container.** Injecting credentials at the gateway
+means terminating TLS there, so container clients must trust the gateway's CA.
+The SDK mounts a combined bundle (the **host's** root store plus the gateway CA)
+and points `SSL_CERT_FILE` / `DENO_CERT` at it, which covers Node, Deno, OpenSSL
+and therefore Python's stdlib `ssl`, `httpx` and `uv`. Two clients read only
+their own variable and are filled in by `caBundleEnvArgs` in
+`src/container-runner.ts`: Python's `requests` (`REQUESTS_CA_BUNDLE`,
+`CURL_CA_BUNDLE`) and git-over-HTTPS (`GIT_SSL_CAINFO`).
+
+The consequence is deliberate and worth stating: `requests` normally validates
+against `certifi`'s curated Mozilla set, and after this it validates against the
+host's root store instead — on macOS that includes any root an operator has
+added to the Keychain. This is the same trust surface the rest of the container
+already has via `SSL_CERT_FILE`; it is the price of routing egress through the
+vault, not an incidental widening. Nothing is set when the SDK mounts no bundle.
 
 ### 5. Egress Lockdown (Forced Proxy)
 

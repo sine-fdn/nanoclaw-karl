@@ -147,10 +147,22 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 # Model weights are NOT baked in here — that would need a network call at
 # build time pinned to a fixed model revision, and would bloat every image
 # whether or not a group actually uses Marker. They download on first real
-# conversion instead, into $HOME/.cache/huggingface. Mount that path from the
-# host (additionalMounts on the agent group's container config) so it
-# survives container restarts (`--rm` wipes anything not mounted) instead of
-# re-downloading every time.
+# conversion instead, into $HOME/.cache (marker keeps its own weights under
+# .cache/datalab, HuggingFace artifacts land in .cache/huggingface). The host
+# mounts a per-group persistent directory over $HOME/.cache at spawn time
+# (src/group-init.ts `modelCacheDir`, mounted in src/container-runner.ts), so
+# that download happens once per group instead of on every start — `--rm`
+# would otherwise wipe it each time. No per-group configuration needed.
+#
+# FONT_DIR/FONT_PATH move marker's font out of its own install directory and
+# into that persistent cache. Marker downloads GoNotoCurrent-Regular.ttf on
+# first use and writes it next to its code, but the uv tool venv is root-owned
+# and world-readable only (chmod a+rX below) while the container runs as the
+# host's uid — so the default fails with PermissionError. Both variables are
+# required: marker builds FONT_PATH from FONT_DIR at class-definition time, so
+# overriding FONT_DIR alone leaves FONT_PATH pointing back at the venv.
+# Making the venv writable instead would not help — writes there land in the
+# ephemeral container layer and vanish with `--rm`.
 #
 # build-essential + Pillow's external-library dev headers (added to the apt
 # block above, same flag): uv provisions its own (unpinned, latest) Python
@@ -171,6 +183,12 @@ RUN if [ "$INSTALL_MARKER" = "true" ] || [ "$INSTALL_TYPST" = "true" ]; then \
         uv tool install "marker-pdf==${MARKER_PDF_VERSION}" && \
         chmod -R a+rX /opt/uv-tools; \
     fi
+
+# Deliberately AFTER the install above: these are read at runtime only, and an
+# ENV ahead of that RUN would invalidate its cache layer, re-downloading torch
+# on every change here.
+ENV FONT_DIR=/home/node/.cache/datalab/fonts
+ENV FONT_PATH=/home/node/.cache/datalab/fonts/GoNotoCurrent-Regular.ttf
 
 # ---- Typst (Markdown → PDF rendering), opt-in --------------------------------
 # Pairs with pandoc (apt block above) and uv (installed above, shared with

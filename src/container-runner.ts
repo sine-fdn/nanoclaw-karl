@@ -31,7 +31,7 @@ import { EGRESS_NETWORK, egressNetworkArgs, ensureEgressNetwork } from './egress
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
-import { initGroupFilesystem } from './group-init.js';
+import { initGroupFilesystem, modelCacheDir } from './group-init.js';
 import { stopTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './modules/mount-security/index.js';
@@ -269,6 +269,35 @@ export function hardeningArgs(pidsLimit: string): string[] {
   return args;
 }
 
+/**
+ * CA-bundle env for the clients the OneCLI SDK leaves uncovered.
+ *
+ * The SDK points Node, Deno and OpenSSL at the combined bundle via
+ * SSL_CERT_FILE + DENO_CERT, which also covers Python's stdlib ssl, httpx and
+ * uv, plus the curl tool. Two clients read their own variable and nothing
+ * else: Python's `requests` pins certifi and honors only REQUESTS_CA_BUNDLE /
+ * CURL_CA_BUNDLE, and git-over-HTTPS honors only GIT_SSL_CAINFO. Both reject
+ * the gateway's MITM certificate without them — that is why marker_single's
+ * model downloads and git pushes fail while everything else works.
+ *
+ * Takes the bundle path from whatever the SDK actually pushed rather than
+ * hardcoding /tmp/onecli-combined-ca.pem: the SDK only mounts the bundle when
+ * it can build one, and pointing these at a missing file would break EVERY
+ * TLS call from those clients instead of just the proxied ones. No
+ * SSL_CERT_FILE in the args means no bundle, so emit nothing.
+ *
+ * Note this widens what those clients trust — the combined bundle is the
+ * HOST's root store plus the gateway CA, not certifi's curated set. That is
+ * the intended consequence of routing egress through the vault; see
+ * docs/SECURITY.md.
+ */
+export function caBundleEnvArgs(args: string[]): string[] {
+  const prefix = 'SSL_CERT_FILE=';
+  const bundle = args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+  if (!bundle) return [];
+  return ['-e', `REQUESTS_CA_BUNDLE=${bundle}`, '-e', `CURL_CA_BUNDLE=${bundle}`, '-e', `GIT_SSL_CAINFO=${bundle}`];
+}
+
 function resolveProviderContribution(
   session: Session,
   agentGroup: AgentGroup,
@@ -363,6 +392,15 @@ export function buildMounts(
   if (defaultSurfaces) {
     mounts.push({ hostPath: claudeDir, containerPath: '/home/node/.claude', readonly: false });
   }
+
+  // Per-group HOME cache at /home/node/.cache — keeps multi-GB model
+  // downloads (Marker's surya weights + font, HuggingFace) across the `--rm`
+  // container boundary. initGroupFilesystem() creates the host dir before
+  // mounts are built, so this is unconditional; it is deliberately not gated
+  // on defaultSurfaces, since the cache has nothing to do with the provider.
+  // Nothing in the image lives under this path — Chromium comes from apt and
+  // PNPM_HOME is /pnpm — so mounting it whole shadows nothing.
+  mounts.push({ hostPath: modelCacheDir(agentGroup.id), containerPath: '/home/node/.cache', readonly: false });
 
   // Shared agent-runner source — read-only, same code for all groups.
   const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
@@ -542,6 +580,10 @@ async function buildContainerArgs(
     throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
   }
   log.info('OneCLI gateway applied', { containerName });
+
+  // Fill the gaps in the gateway's own cert env — must run after the apply
+  // above, which is what puts SSL_CERT_FILE in the args. See caBundleEnvArgs.
+  args.push(...caBundleEnvArgs(args));
 
   // The gateway's HTTP(S)_PROXY applies to ALL outbound traffic by default,
   // including loopback. Tools that spawn local subprocesses and health-check

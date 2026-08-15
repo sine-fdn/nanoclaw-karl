@@ -35,6 +35,26 @@ const DEFAULT_SETTINGS_JSON =
   ) + '\n';
 
 /**
+ * Per-agent-group model/tool cache, mounted RW at `/home/node/.cache`.
+ *
+ * Containers run with `--rm`, so anything a tool downloads into the container's
+ * HOME cache is gone on the next spawn. Marker is the expensive case: it pulls
+ * multiple GB of surya/torch weights into `~/.cache/datalab` (plus its GoNoto
+ * font) and a chunk of `~/.cache/huggingface` on first conversion. Redirecting
+ * those with env vars is not enough — marker's own cache root is not reliably
+ * overridable (datalab-to/marker#1013) — so the whole cache directory is
+ * persisted instead, which also covers whatever the next tool decides to put
+ * there.
+ *
+ * Per group rather than one shared cache: a shared directory would be a
+ * cross-group write channel into a path models are loaded from, which the
+ * isolation model does not allow. The cost is disk, not correctness.
+ */
+export function modelCacheDir(agentGroupId: string): string {
+  return path.join(DATA_DIR, 'model-cache', agentGroupId);
+}
+
+/**
  * Initialize the on-disk filesystem state for an agent group. Idempotent —
  * every step is gated on the target not already existing, so re-running on
  * an already-initialized group is a no-op.
@@ -116,6 +136,15 @@ export function initGroupFilesystem(
       fs.mkdirSync(skillsDst, { recursive: true });
       initialized.push('skills/');
     }
+  }
+
+  // 3. data/model-cache/<id>/ — persistent HOME cache (see modelCacheDir).
+  // Not gated on defaultSurfaces: the cache is provider-independent, and
+  // creating it here means the mount in buildMounts() is unconditional.
+  const cacheDir = modelCacheDir(group.id);
+  if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    initialized.push('model-cache/');
   }
 
   if (initialized.length > 0) {

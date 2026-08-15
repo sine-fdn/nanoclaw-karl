@@ -280,14 +280,13 @@ onecli agents secrets --id "$AGENT_ID"
 
 ### git over HTTPS
 
-OneCLI's proxy injects credentials proactively — `injections_applied=1` appears in `docker logs onecli` even when git sends no auth header. However, OneCLI sets `SSL_CERT_FILE` for Node/Python/Deno but not `GIT_SSL_CAINFO`. Without it, git rejects the OneCLI MITM certificate.
+OneCLI's proxy injects credentials proactively — `injections_applied=1` appears in `docker logs onecli` even when git sends no auth header. OneCLI itself sets `SSL_CERT_FILE` for Node/Python/Deno but not `GIT_SSL_CAINFO`, without which git rejects the OneCLI MITM certificate. The host now fills that gap for every container (`caBundleEnvArgs` in `src/container-runner.ts`, alongside `REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE` for Python's `requests`), so `GIT_SSL_CAINFO` no longer needs a per-group entry — check `docker inspect <container> | grep GIT_SSL_CAINFO` before adding one by hand.
 
 **Auth format matters**: GitHub's git smart HTTP protocol (`github.com`) requires `Basic` auth, not `Bearer`. GitHub's REST API (`api.github.com`) accepts `Bearer`. These must be configured as separate secrets with different formats — see `/add-github` for the full setup.
 
-If an agent uses `git` or `gh`, add to `data/v2-sessions/<agent-group-id>/.claude-shared/settings.json`:
+If an agent uses `git` or `gh`, add the remaining entries to `data/v2-sessions/<agent-group-id>/.claude-shared/settings.json`:
 
 ```json
-"GIT_SSL_CAINFO": "/tmp/onecli-combined-ca.pem",
 "GIT_TERMINAL_PROMPT": "0",
 "GIT_CONFIG_COUNT": "1",
 "GIT_CONFIG_KEY_0": "credential.helper",

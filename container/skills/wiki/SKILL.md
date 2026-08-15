@@ -38,16 +38,26 @@ not just a summary.
   directly for ingestion. After saving the PDF under the raw-sources path,
   run:
   ```bash
-  marker_single <sources-dir>/<subdir>/<YYYY-MM-DD>-<slug>.pdf --output_format markdown --output_dir <sources-dir>/<subdir>/
+  marker_single <sources-dir>/<subdir>/<YYYY-MM-DD>-<slug>.pdf --output_format markdown --output_dir <sources-dir>/<subdir>/ --disable_ocr
   ```
   (requires Marker installed in the container image — see the project's
   `INSTALL_MARKER` build flag). This writes a Markdown twin next to the PDF
   (same date-prefixed name, `.md` extension). Read and ingest **that
   Markdown file**, not the PDF — it's what you cite against for this
   source. The PDF stays in the raw-sources path as the immutable original.
+
+  `--disable_ocr` is not optional here: Marker's OCR path needs a local
+  inference server (`llama-server`) that this image does not ship, so
+  leaving it off makes the run fail on anything that triggers OCR. The flag
+  skips that path entirely, which is correct for digital PDFs. No other
+  environment setup is needed — font and CA paths are configured in the
+  image, so if you find a recipe telling you to `export FONT_PATH` or
+  `REQUESTS_CA_BUNDLE` first, it is stale.
+
   Exception: scanned/image-only PDFs — Marker expects a digital,
-  text-bearing PDF. If a PDF turns out to be a scan, fall back to reading
-  it natively for that source and note the exception in `wiki/log.md`.
+  text-bearing PDF and cannot OCR here. If a PDF turns out to be a scan, or
+  its tables come out garbled (the table processor also falls back to OCR),
+  read it natively for that source and note the exception in `wiki/log.md`.
 - **Images:** read natively — no extra tooling needed.
 - **Voice/audio:** unless a transcription capability is installed for this
   group, only ingest already-transcribed text (e.g. from Voice Memos,

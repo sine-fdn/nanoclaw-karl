@@ -149,6 +149,37 @@ export type ProviderEvent =
   | { type: 'error'; message: string; retryable: boolean; classification?: string }
   | { type: 'progress'; message: string }
   /**
+   * Token/cost accounting for a completed turn. Providers that can report it
+   * SHOULD; those that can't simply never yield this. `modelUsage` is the
+   * per-model breakdown when the SDK supplies one — it is the only place
+   * subagent spend becomes visible, since subagents never surface as turns of
+   * their own. Purely observational: nothing in the poll-loop acts on it.
+   */
+  | {
+      type: 'usage';
+      inputTokens: number;
+      cacheCreationTokens: number;
+      cacheReadTokens: number;
+      outputTokens: number;
+      costUsd?: number;
+      numTurns?: number;
+      durationMs?: number;
+      modelUsage?: Record<string, unknown>;
+    }
+  /**
+   * Rate-limit headroom as reported by the provider. Emitted for EVERY
+   * observation including healthy ones — `status` distinguishes them
+   * ('allowed' | 'allowed_warning' | 'rejected'). A blocking limit is
+   * additionally surfaced as an `error`; this event is the telemetry twin.
+   */
+  | {
+      type: 'rate_limit';
+      status: string;
+      rateLimitType?: string;
+      utilization?: number;
+      resetsAt?: string;
+    }
+  /**
    * Liveness signal. Providers MUST yield this on every underlying SDK
    * event (tool call, thinking, partial message, anything) so the
    * poll-loop's idle timer stays honest during long tool runs.

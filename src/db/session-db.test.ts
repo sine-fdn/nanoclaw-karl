@@ -155,3 +155,56 @@ describe('syncProcessingAcks — script-skip counter', () => {
     expect(status(inDb, 't1')).toBe('completed');
   });
 });
+
+describe('usage telemetry tables', () => {
+  const usageDir = '/tmp/nanoclaw-usage-schema-test';
+  const outPath = path.join(usageDir, 'outbound.db');
+
+  afterEach(() => {
+    if (fs.existsSync(usageDir)) fs.rmSync(usageDir, { recursive: true });
+  });
+
+  function freshOutbound(): Database.Database {
+    if (fs.existsSync(usageDir)) fs.rmSync(usageDir, { recursive: true });
+    fs.mkdirSync(usageDir, { recursive: true });
+    ensureSchema(outPath, 'outbound');
+    return new Database(outPath);
+  }
+
+  it('accepts the rows the container writes for a completed turn', () => {
+    const db = freshOutbound();
+    // Mirrors recordSessionUsage() in container/agent-runner/src/db/connection.ts.
+    db.prepare(
+      `INSERT INTO session_usage
+         (recorded_at, input_tokens, cache_creation_tokens, cache_read_tokens,
+          output_tokens, cost_usd, num_turns, duration_ms, model_usage)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run('2026-08-14T10:00:00.000Z', 5038, 8096, 15932, 344, 0.42, 3, 9100, '{"claude-opus-5":{"inputTokens":5038}}');
+
+    const row = db.prepare('SELECT * FROM session_usage').get() as Record<string, unknown>;
+    expect(row.cache_read_tokens).toBe(15932);
+    expect(row.cost_usd).toBeCloseTo(0.42);
+    expect(JSON.parse(row.model_usage as string)['claude-opus-5'].inputTokens).toBe(5038);
+    db.close();
+  });
+
+  it('records rate-limit headroom including healthy observations', () => {
+    const db = freshOutbound();
+    // Mirrors recordRateLimitObservation(); 'allowed' rows are the point —
+    // they are what shows how close a burst came to blocking.
+    const ins = db.prepare(
+      `INSERT INTO rate_limit_observations (recorded_at, status, rate_limit_type, utilization, resets_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    ins.run('2026-08-14T10:00:00.000Z', 'allowed', 'five_hour', 0.12, '2026-08-14T15:00:00.000Z');
+    ins.run('2026-08-14T10:05:00.000Z', 'allowed_warning', 'five_hour', 0.88, '2026-08-14T15:00:00.000Z');
+
+    const peak = db
+      .prepare('SELECT MAX(utilization) AS u FROM rate_limit_observations WHERE rate_limit_type = ?')
+      .get('five_hour') as { u: number };
+    expect(peak.u).toBeCloseTo(0.88);
+    // Nullable columns must tolerate a provider that reports only a status.
+    expect(() => ins.run('2026-08-14T10:06:00.000Z', 'allowed', null, null, null)).not.toThrow();
+    db.close();
+  });
+});

@@ -271,4 +271,35 @@ CREATE TABLE IF NOT EXISTS container_state (
   tool_started_at          TEXT,
   updated_at               TEXT NOT NULL
 );
+
+-- Per-turn token/cost accounting. Container appends one row per completed
+-- turn from the provider's usage event; nothing reads it to make a decision.
+-- model_usage is the SDK's per-model JSON breakdown — the only place spend by
+-- subagents becomes visible, since subagents never surface as turns of their
+-- own.
+CREATE TABLE IF NOT EXISTS session_usage (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  recorded_at           TEXT NOT NULL,
+  input_tokens          INTEGER NOT NULL,
+  cache_creation_tokens INTEGER NOT NULL,
+  cache_read_tokens     INTEGER NOT NULL,
+  output_tokens         INTEGER NOT NULL,
+  cost_usd              REAL,
+  num_turns             INTEGER,
+  duration_ms           INTEGER,
+  model_usage           TEXT
+);
+
+-- Rate-limit headroom as reported by the provider, healthy observations
+-- included. rate_limit_type names the window (e.g. five_hour) and utilization
+-- is 0..1 — together they show how close a burst came to blocking, which no
+-- log line preserved before.
+CREATE TABLE IF NOT EXISTS rate_limit_observations (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  recorded_at     TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  rate_limit_type TEXT,
+  utilization     REAL,
+  resets_at       TEXT
+);
 `;

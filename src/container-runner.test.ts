@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 
-import { hardeningArgs, resolveProviderName } from './container-runner.js';
+import { caBundleEnvArgs, hardeningArgs, resolveProviderName } from './container-runner.js';
 
 describe('resolveProviderName', () => {
   it('prefers session over container config', () => {
@@ -44,6 +44,84 @@ describe('buildContainerArgs ordering invariant (structural)', () => {
     expect(mountsLoop).toBeGreaterThan(-1);
     expect(gatewayApply).toBeGreaterThan(-1);
     expect(gatewayApply).toBeGreaterThan(mountsLoop);
+  });
+});
+
+describe('caBundleEnvArgs', () => {
+  const withBundle = ['-e', 'HOME=/home/node', '-e', 'SSL_CERT_FILE=/tmp/onecli-combined-ca.pem'];
+
+  it('mirrors the SDK-pushed bundle onto the clients that ignore SSL_CERT_FILE', () => {
+    expect(caBundleEnvArgs(withBundle)).toEqual([
+      '-e',
+      'REQUESTS_CA_BUNDLE=/tmp/onecli-combined-ca.pem',
+      '-e',
+      'CURL_CA_BUNDLE=/tmp/onecli-combined-ca.pem',
+      '-e',
+      'GIT_SSL_CAINFO=/tmp/onecli-combined-ca.pem',
+    ]);
+  });
+
+  it('follows the SDK if it moves the bundle rather than assuming /tmp', () => {
+    expect(caBundleEnvArgs(['-e', 'SSL_CERT_FILE=/etc/onecli/ca.pem'])).toEqual([
+      '-e',
+      'REQUESTS_CA_BUNDLE=/etc/onecli/ca.pem',
+      '-e',
+      'CURL_CA_BUNDLE=/etc/onecli/ca.pem',
+      '-e',
+      'GIT_SSL_CAINFO=/etc/onecli/ca.pem',
+    ]);
+  });
+
+  // The SDK skips the bundle when it can't build one. Emitting a path anyway
+  // would point every requests/git call at a file that isn't mounted, turning
+  // a proxy-only failure into a total TLS failure.
+  it('emits nothing when no bundle was mounted', () => {
+    expect(caBundleEnvArgs(['-e', 'HOME=/home/node', '-e', 'DENO_CERT=/tmp/x.pem'])).toEqual([]);
+    expect(caBundleEnvArgs([])).toEqual([]);
+  });
+
+  it('does not match a variable that merely ends in SSL_CERT_FILE', () => {
+    expect(caBundleEnvArgs(['-e', 'MY_SSL_CERT_FILE=/tmp/other.pem'])).toEqual([]);
+  });
+});
+
+describe('CA env fill runs after the gateway apply (structural)', () => {
+  // caBundleEnvArgs reads SSL_CERT_FILE out of the args, and only
+  // applyContainerConfig puts it there. Called earlier it would silently
+  // return [] and every Python `requests` call would keep failing TLS.
+  it('calls caBundleEnvArgs after onecli.applyContainerConfig', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'container-runner.ts'), 'utf-8');
+    const gatewayApply = src.indexOf('onecli.applyContainerConfig');
+    const caFill = src.indexOf('args.push(...caBundleEnvArgs(args))');
+    expect(gatewayApply).toBeGreaterThan(-1);
+    expect(caFill).toBeGreaterThan(gatewayApply);
+  });
+});
+
+describe('persistent HOME cache mount (structural)', () => {
+  // Containers run with --rm, so Marker's multi-GB surya weights and its font
+  // re-download on every spawn unless HOME's cache is mounted from the host.
+  // Driving buildMounts needs a provider registry + composed group surfaces,
+  // so guard the wiring structurally: the mount must exist, be writable, and
+  // not sit behind the defaultSurfaces (Claude-provider) gate.
+  it('mounts the per-group model cache at /home/node/.cache read-write', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'container-runner.ts'), 'utf-8');
+    const idx = src.indexOf('modelCacheDir(agentGroup.id)');
+    expect(idx).toBeGreaterThan(-1);
+    const mountExpr = src.slice(idx, idx + 160);
+    expect(mountExpr).toContain("containerPath: '/home/node/.cache'");
+    expect(mountExpr).toContain('readonly: false');
+  });
+
+  it('creates the host directory unconditionally, not behind defaultSurfaces', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'group-init.ts'), 'utf-8');
+    const claudeGate = src.indexOf('if (defaultSurfaces) {');
+    const cacheInit = src.indexOf('const cacheDir = modelCacheDir(group.id)');
+    expect(cacheInit).toBeGreaterThan(-1);
+    // The cache step lives after the defaultSurfaces block closes, so a
+    // non-Claude provider still gets a cache.
+    expect(cacheInit).toBeGreaterThan(claudeGate);
+    expect(src.slice(cacheInit)).not.toContain('defaultSurfaces');
   });
 });
 

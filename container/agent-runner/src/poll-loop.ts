@@ -7,7 +7,13 @@ import {
   type MessageInRow,
 } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
-import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
+import {
+  getInboundDb,
+  touchHeartbeat,
+  clearStaleProcessingAcks,
+  recordSessionUsage,
+  recordRateLimitObservation,
+} from './db/connection.js';
 import {
   clearContinuation,
   clearCurrentInReplyTo,
@@ -604,6 +610,21 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
       break;
     case 'progress':
       log(`Progress: ${event.message}`);
+      break;
+    case 'usage':
+      // Telemetry only — never let an accounting write break a turn.
+      try {
+        recordSessionUsage(event);
+      } catch (err) {
+        log(`usage record failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      break;
+    case 'rate_limit':
+      try {
+        recordRateLimitObservation(event);
+      } catch (err) {
+        log(`rate-limit record failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
       break;
   }
 }
